@@ -1,0 +1,105 @@
+[dataset]
+name = "phanerozoic/qiskit-calibration-drift"
+split = "train"
+# Pinned Hugging Face dataset commit for reproducibility.
+# This snapshot covers roughly 2026-04-07 to 2026-05-01, so it gives
+# more than one week of observations while keeping results deterministic.
+revision = "44118f43caf759b70164506297d35a218976dc5e"
+
+[columns]
+backend = "backend"
+qubit = "qubit"
+property = "property"
+value = "value"
+observed_time = "observed_time"
+calibrated_time = "calibrated_time"
+model_time = "observed_time"
+
+[qubit_snapshot]
+# These are the single-qubit calibration variables needed by the project:
+# coherence (T1/T2), gate error (sx_error), and readout error/confusion.
+properties = [
+  "T1",
+  "T2",
+  "sx_error",
+  "readout_error",
+  "prob_meas0_prep1",
+  "prob_meas1_prep0",
+]
+history_feature_columns = ["T1", "T2", "sx_error", "readout_error"]
+history_max_age = "24h"
+include_missing_indicators = true
+
+[edge_snapshot]
+# CZ properties encode directed couplings in the property name, while raw qubit = -1.
+property_regex = "^cz_error_(\\d+)_(\\d+)$"
+
+[environment]
+columns = [
+  "latitude",
+  "longitude",
+  "solar_zenith_deg",
+  "temperature_c",
+  "pressure_hpa",
+  "humidity_pct",
+  "kp_index",
+  "solar_flux_sfu",
+  "dst_nt",
+  "bz_gsm_nt",
+  "neutron_flux",
+]
+causal_fill = true
+max_fill_age = "6h"
+
+[rolling]
+source_columns = [
+  "temperature_c",
+  "pressure_hpa",
+  "humidity_pct",
+  "kp_index",
+  "solar_flux_sfu",
+  "dst_nt",
+  "bz_gsm_nt",
+  "neutron_flux",
+]
+windows = ["6h", "12h", "24h"]
+closed = "left"
+min_periods = 1
+statistics = ["mean", "max", "min", "std", "count"]
+include_last_previous_value = true
+
+[splits]
+enabled = false
+train_ratio = 0.70
+validation_ratio = 0.15
+test_ratio = 0.15
+split_column = "split"
+
+[fault_prediction]
+enabled = true
+horizon = "24h"
+target_columns = ["sx_error", "readout_error"]
+threshold_method = "quantile"
+threshold_quantile = 0.95
+drop_rows_without_future_label = true
+
+[outliers]
+# Disabled: extreme errors may be the degradation/fault events this project needs to study.
+enabled = false
+
+[scaling]
+enabled = false
+fit_on_split = "train"
+suffix = "_z"
+
+[output]
+directory = "."
+qubit_snapshot_parquet = "qiskit_qubit_snapshots.parquet"
+qubit_snapshot_csv = "qiskit_qubit_snapshots.csv"
+edge_snapshot_parquet = "qiskit_edge_snapshots.parquet"
+edge_snapshot_csv = "qiskit_edge_snapshots.csv"
+fault_prediction_parquet = "qiskit_fault_prediction_24h.parquet"
+fault_prediction_csv = "qiskit_fault_prediction_24h.csv"
+legacy_ml_ready_parquet = "qiskit_calibration_drift_ml_ready.parquet"
+legacy_ml_ready_csv = "qiskit_calibration_drift_ml_ready.csv"
+report = "qiskit_calibration_drift_report.json"

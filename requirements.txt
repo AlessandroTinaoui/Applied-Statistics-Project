@@ -1,0 +1,5 @@
+datasets
+numpy
+pandas
+pyarrow
+tomli; python_version < "3.11"
