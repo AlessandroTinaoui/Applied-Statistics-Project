@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import sys
 from pathlib import Path
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import TimeSeriesSplit
@@ -9,7 +10,14 @@ from sklearn.metrics import average_precision_score, roc_auc_score, f1_score, pr
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from data_preparation import load_and_clean_fault_data, build_preprocessing_pipeline
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_DIR = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_DIR))
+
+from fault_classification.data_preparation import (  # noqa: E402
+    build_preprocessing_pipeline,
+    load_and_clean_fault_data,
+)
 
 
 RESULTS_DIR = Path("./results")

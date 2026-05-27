@@ -2,4 +2,9 @@ datasets
 numpy
 pandas
 pyarrow
+scikit-learn
+scipy
+matplotlib
+seaborn
+xgboost
 tomli; python_version < "3.11"

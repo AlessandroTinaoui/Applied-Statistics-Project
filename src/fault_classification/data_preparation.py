@@ -86,3 +86,26 @@ def build_preprocessing_pipeline(df: pd.DataFrame) -> ColumnTransformer:
     )
 
     return preprocessor, numeric_features, categorical_features
+
+
+def main() -> None:
+    """Run a lightweight data preparation check on the fault prediction view."""
+    dataset_path = Path("dataset/qiskit_fault_prediction_24h.parquet")
+
+    if not dataset_path.exists():
+        raise FileNotFoundError(
+            f"{dataset_path} does not exist. Run `python src/main.py` first."
+        )
+
+    df = load_and_clean_fault_data(dataset_path)
+    _, numeric_features, categorical_features = build_preprocessing_pipeline(df)
+
+    print("\nData preparation check completed.")
+    print(f"Rows: {len(df)}")
+    print(f"Columns after leakage/sparse cleanup: {df.shape[1]}")
+    print(f"Numeric features: {len(numeric_features)}")
+    print(f"Categorical features: {len(categorical_features)} {categorical_features}")
+
+
+if __name__ == "__main__":
+    main()

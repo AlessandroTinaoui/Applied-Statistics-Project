@@ -1,0 +1,3 @@
+RANDOM_STATE = 42
+TARGET_COLUMN = "fault_24h"
+TIME_COLUMN = "model_time"
