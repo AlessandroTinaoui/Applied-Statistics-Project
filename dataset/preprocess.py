@@ -438,43 +438,7 @@ def add_rolling_features(env: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.Dat
     return rolling, rolling_cols
 
 
-def compute_split_cutoffs(df: pd.DataFrame, cfg: dict[str, Any], report: dict[str, Any]) -> dict[str, pd.Timestamp]:
-    split_cfg = cfg["splits"]
-    if not split_cfg.get("enabled", True):
-        return {}
 
-    train_ratio = float(split_cfg["train_ratio"])
-    val_ratio = float(split_cfg["validation_ratio"])
-    test_ratio = float(split_cfg["test_ratio"])
-    total = train_ratio + val_ratio + test_ratio
-    train_ratio, val_ratio = train_ratio / total, val_ratio / total
-
-    times = np.array(sorted(df["model_time"].dropna().unique()))
-    if len(times) < 3:
-        return {}
-
-    train_cut = times[max(0, min(len(times) - 1, int(np.floor(len(times) * train_ratio)) - 1))]
-    val_cut = times[max(0, min(len(times) - 1, int(np.floor(len(times) * (train_ratio + val_ratio))) - 1))]
-    cutoffs = {
-        "train_end": pd.Timestamp(train_cut),
-        "validation_end": pd.Timestamp(val_cut),
-    }
-    report["split_cutoffs"] = {k: str(v) for k, v in cutoffs.items()}
-    return cutoffs
-
-
-def assign_temporal_split(df: pd.DataFrame, cfg: dict[str, Any], cutoffs: dict[str, pd.Timestamp]) -> pd.DataFrame:
-    split_col = cfg["splits"].get("split_column", "split")
-    out = df.copy()
-    if not cfg["splits"].get("enabled", True) or not cutoffs:
-        return out
-
-    out[split_col] = np.select(
-        [out["model_time"] <= cutoffs["train_end"], out["model_time"] <= cutoffs["validation_end"]],
-        ["train", "validation"],
-        default="test",
-    )
-    return out
 
 
 def merge_environment(df: pd.DataFrame, env_features: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
@@ -700,41 +664,6 @@ def numeric_feature_columns(df: pd.DataFrame, cfg: dict[str, Any]) -> list[str]:
     ]
 
 
-def fit_mask(df: pd.DataFrame, cfg: dict[str, Any], section: str) -> pd.Series:
-    split_col = cfg["splits"].get("split_column", "split")
-    fit_split = cfg[section].get("fit_on_split", "train")
-    if cfg["splits"].get("enabled", True) and split_col in df.columns:
-        mask = df[split_col] == fit_split
-        if mask.any():
-            return mask
-    return pd.Series(True, index=df.index)
-
-
-def add_training_standardized_features(
-    df: pd.DataFrame,
-    cfg: dict[str, Any],
-    report: dict[str, Any],
-    dataset_name: str,
-) -> pd.DataFrame:
-    if df.empty or not cfg["scaling"].get("enabled", False):
-        return df
-
-    suffix = cfg["scaling"].get("suffix", "_z")
-    cols = numeric_feature_columns(df, cfg)
-    mask = fit_mask(df, cfg, "scaling")
-    out = df.copy()
-    added = []
-
-    for col in cols:
-        mean = out.loc[mask, col].mean()
-        std = out.loc[mask, col].std(ddof=0)
-        if pd.notna(mean) and pd.notna(std) and std > 0:
-            new_col = f"{col}{suffix}"
-            out[new_col] = (out[col] - mean) / std
-            added.append(new_col)
-
-    report[f"{dataset_name}_standardized_feature_count"] = len(added)
-    return out
 
 
 def summarize_processed_dataset(
@@ -832,11 +761,7 @@ def run(config_path: Path = SCRIPT_DIR / "preprocessing_config.toml") -> dict[st
     env_features, _ = build_environment_features(df, cfg, report)
 
     qubit, qubit_properties = build_qubit_snapshots(df, env_features, cfg, report)
-    cutoffs = compute_split_cutoffs(qubit, cfg, report)
-    qubit = assign_temporal_split(qubit, cfg, cutoffs)
-
     edge = build_edge_snapshots(df, env_features, cfg, report)
-    edge = assign_temporal_split(edge, cfg, cutoffs)
 
     fault = add_future_fault_labels(qubit, cfg, report)
 
@@ -862,9 +787,7 @@ def run(config_path: Path = SCRIPT_DIR / "preprocessing_config.toml") -> dict[st
         protected_cols=set(qubit_properties) | {"fault_24h"},
     )
 
-    qubit = add_training_standardized_features(qubit, cfg, report, "qubit_snapshot")
-    edge = add_training_standardized_features(edge, cfg, report, "edge_snapshot")
-    fault = add_training_standardized_features(fault, cfg, report, "fault_prediction")
+
 
     outputs = {
         "qubit_snapshot": qubit,
