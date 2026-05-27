@@ -546,37 +546,23 @@ def add_future_fault_labels(
         report["fault_prediction_enabled"] = False
         return pd.DataFrame()
 
-    method = fp_cfg.get("threshold_method", "quantile")
-    if method not in {"quantile", "train_quantile"}:
-        raise ValueError("fault threshold_method must be either 'quantile' or 'train_quantile'.")
-
-    split_col = cfg["splits"].get("split_column", "split")
-    if method == "train_quantile":
-        if split_col not in qubit.columns:
-            raise ValueError("threshold_method='train_quantile' requires an existing split column.")
-        threshold_mask = qubit[split_col].eq("train")
-    else:
-        threshold_mask = pd.Series(True, index=qubit.index)
-
     quantile = float(fp_cfg["threshold_quantile"])
-    thresholds: dict[str, float] = {}
-    for col in target_cols:
-        threshold = qubit.loc[threshold_mask, col].dropna().quantile(quantile)
-        if pd.notna(threshold):
-            thresholds[col] = float(threshold)
 
     report["fault_prediction_enabled"] = True
     report["fault_prediction_horizon"] = str(horizon)
-    report["fault_threshold_method"] = fp_cfg["threshold_method"]
+    report["fault_threshold_method"] = "expanding_backend_quantile"
     report["fault_threshold_quantile"] = quantile
-    report["fault_thresholds"] = thresholds
+
+    # Sort to evaluate the quantiles on the correct temporal order
+    qubit = qubit.sort_values("model_time")
+    for col in target_cols:
+      # Calculate the threshold for each backend to avoid data leakage and use only past observations
+      # min_periods is set to 10 to ensure that the threshold is calculated on a sufficient number of observations
+      qubit[f"{col}_threshold"] = qubit.groupby("backend")[col].expanding(min_periods=10).quantile(quantile).reset_index(level=0, drop=True)
 
     out_parts = []
     for _, g in qubit.sort_values(["backend", "qubit", "model_time"]).groupby(["backend", "qubit"], observed=True, sort=False):
         g = g.copy()
-        # Pandas 3 may store timezone-aware timestamps at microsecond
-        # resolution. Force UTC nanoseconds so the 24h horizon has the same
-        # unit as the search array.
         times = (
             pd.to_datetime(g["model_time"], utc=True)
             .dt.tz_convert("UTC")
@@ -587,10 +573,13 @@ def add_future_fault_labels(
         )
         right_bounds = np.searchsorted(times, times + horizon.value, side="right")
 
-        for col, threshold in thresholds.items():
+        for col in target_cols:
             values = g[col].to_numpy(dtype=float)
             future_max = np.full(len(g), np.nan, dtype=float)
             future_count = np.zeros(len(g), dtype=int)
+            
+            # Fetch the threshold for a specific group
+            group_thresholds = g[f"{col}_threshold"].to_numpy(dtype=float)
 
             for i, right in enumerate(right_bounds):
                 future = values[i + 1:right]
@@ -601,14 +590,19 @@ def add_future_fault_labels(
 
             g[f"{col}_future_max_24h"] = future_max
             g[f"{col}_future_obs_count_24h"] = future_count
-            fault = np.where(np.isnan(future_max), np.nan, (future_max > threshold).astype(float))
-            g[f"{col}_fault_24h"] = fault
+            
+            # Evaluate if a fault has occured
+            g[f"{col}_fault_24h"] = np.where(
+                np.isnan(future_max) | np.isnan(group_thresholds),
+                np.nan,
+                (future_max > group_thresholds).astype(float)
+            )
 
         out_parts.append(g)
 
     fault = pd.concat(out_parts, ignore_index=True)
-    fault_cols = [f"{col}_fault_24h" for col in thresholds]
-    obs_count_cols = [f"{col}_future_obs_count_24h" for col in thresholds]
+    fault_cols = [f"{col}_fault_24h" for col in target_cols]
+    obs_count_cols = [f"{col}_future_obs_count_24h" for col in target_cols]
     fault["future_fault_target_count_24h"] = fault[obs_count_cols].gt(0).sum(axis=1)
     fault["fault_24h"] = fault[fault_cols].max(axis=1, skipna=True)
     fault.loc[fault["future_fault_target_count_24h"].eq(0), "fault_24h"] = np.nan
