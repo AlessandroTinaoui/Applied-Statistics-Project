@@ -220,3 +220,4 @@ dataset/*.csv
 dataset/*.parquet
 dataset/*.json
 reports/
+results/
