@@ -68,29 +68,14 @@ min_periods = 1
 statistics = ["mean", "max", "min", "std", "count"]
 include_last_previous_value = true
 
-[splits]
-enabled = false
-train_ratio = 0.70
-validation_ratio = 0.15
-test_ratio = 0.15
-split_column = "split"
 
 [fault_prediction]
 enabled = true
 horizon = "24h"
 target_columns = ["sx_error", "readout_error"]
-threshold_method = "quantile"
 threshold_quantile = 0.95
 drop_rows_without_future_label = true
 
-[outliers]
-# Disabled: extreme errors may be the degradation/fault events this project needs to study.
-enabled = false
-
-[scaling]
-enabled = false
-fit_on_split = "train"
-suffix = "_z"
 
 [output]
 directory = "."
