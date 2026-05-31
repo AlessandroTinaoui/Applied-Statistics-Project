@@ -323,14 +323,12 @@ This document summarizes, in bullet points, what
   - build the graph from `q1` and `q2`;
   - use `cz_error` as an edge weight or edge metric.
 
-## Run Commands
+## Rationale del preprocessing
 
-```bash
-python src/main.py
-```
-
-or directly:
-
-```bash
-python dataset/preprocess.py --config dataset/preprocessing_config.toml
-```
+- **Unità statistica qubit**: la tabella qubit usa `(backend, qubit, observed_time)` come unità perché T1, T2, `sx_error` e `readout_error` sono parametri di calibrazione a singolo qubit.
+- **Tabella separata per gli edge**: gli errori CZ sono tenuti in una tabella distinta perché ogni `cz_error_i_j` appartiene a un coupling a due qubit, non a una riga di singolo qubit.
+- **Nessuna sovrascrittura dei target**: i valori calibrati osservati non vengono sovrascritti da imputazioni; le feature di ultima osservazione vengono aggiunte separatamente con una colonna di età, così i modelli possono tenere conto della *staleness* della misura.
+- **Fill causale dell'ambiente**: i valori ambientali sono allineati per backend e timestamp e forward-filled solo entro una finestra causale limitata, impedendo che informazioni future entrino nelle feature.
+- **Rolling con `closed='left'`**: i riepiloghi al tempo *t* usano solo osservazioni strettamente precedenti a *t*.
+- **Fault label future**: le etichette di guasto sono definite dagli errori osservati nelle 24h successive; con la soglia quantile predefinita si tratta di una definizione descrittiva di errore critico, non di un parametro di modello fittato.
+- **Outlier clipping disabilitato di default**: gli errori estremi possono essere eventi di degradazione genuini, scientificamente rilevanti per la fault tolerance.

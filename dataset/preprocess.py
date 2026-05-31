@@ -87,12 +87,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "horizon": "24h",
         "target_columns": ["sx_error", "readout_error"],
-        "threshold_method": "quantile",
         "threshold_quantile": 0.95,
         "drop_rows_without_future_label": True,
-    },
-    "outliers": {
-        "enabled": False,
     },
     "output": {
         "directory": ".",
@@ -164,6 +160,55 @@ def validate_required_columns(df: pd.DataFrame, required: list[str]) -> None:
         raise ValueError(f"Missing required columns: {missing}")
 
 
+def write_dataframe(df: pd.DataFrame, path: Path) -> None:
+    if path.suffix == ".parquet":
+        df.to_parquet(path, index=False)
+    elif path.suffix == ".csv":
+        df.to_csv(path, index=False)
+    else:
+        raise ValueError(f"Unsupported output format: {path}")
+
+
+
+#------------------------------------------------------------#
+#                           Logic                            #
+#------------------------------------------------------------#
+def load_raw_dataset(cfg: dict[str, Any], report: dict[str, Any]) -> pd.DataFrame:
+    dataset_cfg = cfg["dataset"]
+    cols = cfg["columns"]
+    load_kwargs = {
+        "path": dataset_cfg["name"],
+        "split": dataset_cfg["split"],
+    }
+    if dataset_cfg.get("revision"):
+        load_kwargs["revision"] = dataset_cfg["revision"]
+
+    ds = load_dataset(**load_kwargs)
+    report["dataset_name"] = dataset_cfg["name"]
+    report["dataset_split"] = dataset_cfg["split"]
+    report["dataset_revision"] = dataset_cfg.get("revision")
+    report["dataset_fingerprint"] = getattr(ds, "_fingerprint", None)
+
+    df = ds.to_pandas()
+    report["raw_shape"] = list(df.shape)
+    report["raw_columns"] = list(df.columns)
+    report["raw_missingness"] = {
+        col: float(rate)
+        for col, rate in df.isna().mean().sort_values(ascending=False).items()
+        if rate > 0
+    }
+    report["raw_property_counts_top"] = (
+        df[cols["property"]].value_counts(dropna=False).head(20).astype(int).to_dict()
+    )
+    report["raw_backend_counts"] = df[cols["backend"]].value_counts(dropna=False).astype(int).to_dict()
+    report["raw_qubit_range"] = {
+        "min": int(df[cols["qubit"]].min()),
+        "max": int(df[cols["qubit"]].max()),
+        "nunique": int(df[cols["qubit"]].nunique(dropna=True)),
+    }
+    return df
+
+
 def parse_times_and_values(df: pd.DataFrame, cfg: dict[str, Any], report: dict[str, Any]) -> pd.DataFrame:
     cols = cfg["columns"]
     df = df.copy()
@@ -201,64 +246,6 @@ def parse_times_and_values(df: pd.DataFrame, cfg: dict[str, Any], report: dict[s
     return df
 
 
-def load_raw_dataset(cfg: dict[str, Any], report: dict[str, Any]) -> pd.DataFrame:
-    dataset_cfg = cfg["dataset"]
-    load_kwargs = {
-        "path": dataset_cfg["name"],
-        "split": dataset_cfg["split"],
-    }
-    if dataset_cfg.get("revision"):
-        load_kwargs["revision"] = dataset_cfg["revision"]
-
-    ds = load_dataset(**load_kwargs)
-    report["dataset_name"] = dataset_cfg["name"]
-    report["dataset_split"] = dataset_cfg["split"]
-    report["dataset_revision"] = dataset_cfg.get("revision")
-    report["dataset_fingerprint"] = getattr(ds, "_fingerprint", None)
-
-    df = ds.to_pandas()
-    report["raw_shape"] = list(df.shape)
-    report["raw_columns"] = list(df.columns)
-    return df
-
-
-def summarize_raw_dataset(df: pd.DataFrame, cfg: dict[str, Any], report: dict[str, Any]) -> None:
-    cols = cfg["columns"]
-    report["raw_missingness"] = {
-        col: float(rate)
-        for col, rate in df.isna().mean().sort_values(ascending=False).items()
-        if rate > 0
-    }
-    report["raw_property_counts_top"] = (
-        df[cols["property"]].value_counts(dropna=False).head(20).astype(int).to_dict()
-    )
-    report["raw_backend_counts"] = df[cols["backend"]].value_counts(dropna=False).astype(int).to_dict()
-    report["raw_qubit_range"] = {
-        "min": int(df[cols["qubit"]].min()),
-        "max": int(df[cols["qubit"]].max()),
-        "nunique": int(df[cols["qubit"]].nunique(dropna=True)),
-    }
-
-
-def pivot_properties(
-    df: pd.DataFrame,
-    id_cols: list[str],
-    property_col: str,
-    value_col: str,
-) -> pd.DataFrame:
-    wide = (
-        df.pivot_table(
-            index=id_cols,
-            columns=property_col,
-            values=value_col,
-            aggfunc="median",
-        )
-        .reset_index()
-    )
-    wide.columns = [sanitize_column_name(c) for c in wide.columns]
-    return wide
-
-
 def time_limited_forward_fill(
     df: pd.DataFrame,
     group_cols: list[str],
@@ -285,96 +272,6 @@ def time_limited_forward_fill(
         out.append(g)
 
     return pd.concat(out, ignore_index=True)
-
-
-def add_last_observation_features(
-    df: pd.DataFrame,
-    group_cols: list[str],
-    time_col: str,
-    value_cols: list[str],
-    max_age: pd.Timedelta,
-    include_missing_indicators: bool = True,
-) -> tuple[pd.DataFrame, list[str]]:
-    if not value_cols:
-        return df.copy(), []
-
-    out = []
-    added: list[str] = []
-    for _, g in df.sort_values(group_cols + [time_col]).groupby(group_cols, observed=True, sort=False):
-        g = g.sort_values(time_col).copy()
-        t = g[time_col]
-
-        for col in value_cols:
-            if col not in g.columns:
-                continue
-
-            observed = g[col].notna()
-            last_value = g[col].ffill()
-            last_time = t.where(observed).ffill()
-            age = t - last_time
-            too_old = age > max_age
-            value_name = f"{col}_last_obs"
-            age_name = f"{col}_last_obs_age_hours"
-            was_missing_name = f"{col}_was_missing"
-
-            g[value_name] = last_value.mask(too_old)
-            g[age_name] = (age.dt.total_seconds() / 3600).where(last_value.notna()).mask(too_old)
-
-            new_cols = [value_name, age_name]
-            if include_missing_indicators:
-                g[was_missing_name] = g[col].isna().astype("int8")
-                new_cols.append(was_missing_name)
-
-            for new_col in new_cols:
-                if new_col not in added:
-                    added.append(new_col)
-
-        out.append(g)
-
-    return pd.concat(out, ignore_index=True), added
-
-
-def build_environment_features(
-    df: pd.DataFrame,
-    cfg: dict[str, Any],
-    report: dict[str, Any],
-) -> tuple[pd.DataFrame, list[str]]:
-    cols = cfg["columns"]
-    backend_col = cols["backend"]
-    env_candidates = cfg["environment"]["columns"]
-    available = [c for c in env_candidates if c in df.columns]
-    numeric = [c for c in available if pd.api.types.is_numeric_dtype(df[c])]
-
-    if not numeric:
-        report["environment_available_columns"] = []
-        return df[[backend_col, "model_time"]].drop_duplicates(), []
-
-    env = (
-        df.groupby([backend_col, "model_time"], as_index=False, observed=True)[numeric]
-        .median()
-        .sort_values([backend_col, "model_time"])
-    )
-
-    missing = env[numeric].isna().mean()
-    report["environment_available_columns"] = numeric
-    report["environment_all_missing_columns"] = sorted(missing[missing >= 1.0].index.tolist())
-
-    usable_current = [c for c in numeric if missing[c] < 1.0]
-    if cfg["environment"].get("causal_fill", True) and usable_current:
-        env = time_limited_forward_fill(
-            env,
-            group_cols=[backend_col],
-            time_col="model_time",
-            value_cols=usable_current,
-            max_age=pd.Timedelta(cfg["environment"]["max_fill_age"]),
-        )
-
-    rolling, rolling_cols = add_rolling_features(env, cfg)
-    features = env.merge(rolling, on=[backend_col, "model_time"], how="left", validate="one_to_one")
-    feature_cols = [c for c in features.columns if c not in [backend_col, "model_time"]]
-    report["environment_feature_count_before_low_info_drop"] = len(feature_cols)
-    report["rolling_feature_count"] = len(rolling_cols)
-    return features, feature_cols
 
 
 def add_rolling_features(env: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, list[str]]:
@@ -428,9 +325,118 @@ def add_rolling_features(env: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.Dat
 
 
 
+def build_environment_features(
+    df: pd.DataFrame,
+    cfg: dict[str, Any],
+    report: dict[str, Any],
+) -> tuple[pd.DataFrame, list[str]]:
+    cols = cfg["columns"]
+    backend_col = cols["backend"]
+    env_candidates = cfg["environment"]["columns"]
+    available = [c for c in env_candidates if c in df.columns]
+    numeric = [c for c in available if pd.api.types.is_numeric_dtype(df[c])]
+
+    if not numeric:
+        report["environment_available_columns"] = []
+        return df[[backend_col, "model_time"]].drop_duplicates(), []
+
+    env = (
+        df.groupby([backend_col, "model_time"], as_index=False, observed=True)[numeric]
+        .median()
+        .sort_values([backend_col, "model_time"])
+    )
+
+    missing = env[numeric].isna().mean()
+    report["environment_available_columns"] = numeric
+    report["environment_all_missing_columns"] = sorted(missing[missing >= 1.0].index.tolist())
+
+    usable_current = [c for c in numeric if missing[c] < 1.0]
+    if cfg["environment"].get("causal_fill", True) and usable_current:
+        env = time_limited_forward_fill(
+            env,
+            group_cols=[backend_col],
+            time_col="model_time",
+            value_cols=usable_current,
+            max_age=pd.Timedelta(cfg["environment"]["max_fill_age"]),
+        )
+
+    rolling, rolling_cols = add_rolling_features(env, cfg)
+    features = env.merge(rolling, on=[backend_col, "model_time"], how="left", validate="one_to_one")
+    feature_cols = [c for c in features.columns if c not in [backend_col, "model_time"]]
+    report["environment_feature_count_before_low_info_drop"] = len(feature_cols)
+    report["rolling_feature_count"] = len(rolling_cols)
+    return features, feature_cols
+
+
+def pivot_properties(
+    df: pd.DataFrame,
+    id_cols: list[str],
+    property_col: str,
+    value_col: str,
+) -> pd.DataFrame:
+    wide = (
+        df.pivot_table(
+            index=id_cols,
+            columns=property_col,
+            values=value_col,
+            aggfunc="median",
+        )
+        .reset_index()
+    )
+    wide.columns = [sanitize_column_name(c) for c in wide.columns]
+    return wide
+
+
 def merge_environment(df: pd.DataFrame, env_features: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
     backend_col = cfg["columns"]["backend"]
     return df.merge(env_features, on=[backend_col, "model_time"], how="left", validate="many_to_one")
+
+
+def add_last_observation_features(
+    df: pd.DataFrame,
+    group_cols: list[str],
+    time_col: str,
+    value_cols: list[str],
+    max_age: pd.Timedelta,
+    include_missing_indicators: bool = True,
+) -> tuple[pd.DataFrame, list[str]]:
+    if not value_cols:
+        return df.copy(), []
+
+    out = []
+    added: list[str] = []
+    for _, g in df.sort_values(group_cols + [time_col]).groupby(group_cols, observed=True, sort=False):
+        g = g.sort_values(time_col).copy()
+        t = g[time_col]
+
+        for col in value_cols:
+            if col not in g.columns:
+                continue
+
+            observed = g[col].notna()
+            last_value = g[col].ffill()
+            last_time = t.where(observed).ffill()
+            age = t - last_time
+            too_old = age > max_age
+            value_name = f"{col}_last_obs"
+            age_name = f"{col}_last_obs_age_hours"
+            was_missing_name = f"{col}_was_missing"
+
+            g[value_name] = last_value.mask(too_old)
+            g[age_name] = (age.dt.total_seconds() / 3600).where(last_value.notna()).mask(too_old)
+
+            new_cols = [value_name, age_name]
+            if include_missing_indicators:
+                g[was_missing_name] = g[col].isna().astype("int8")
+                new_cols.append(was_missing_name)
+
+            for new_col in new_cols:
+                if new_col not in added:
+                    added.append(new_col)
+
+        out.append(g)
+
+    return pd.concat(out, ignore_index=True), added
 
 
 def build_qubit_snapshots(
@@ -537,7 +543,6 @@ def add_future_fault_labels(
 
     report["fault_prediction_enabled"] = True
     report["fault_prediction_horizon"] = str(horizon)
-    report["fault_threshold_method"] = "expanding_backend_quantile"
     report["fault_threshold_quantile"] = quantile
 
     # Sort to evaluate the quantiles on the correct temporal order
@@ -643,27 +648,6 @@ def summarize_processed_dataset(
     }
 
 
-def theoretical_rationale() -> list[str]:
-    return [
-        "The qubit-level table uses (backend, qubit, observed_time) as the statistical unit because T1, T2, sx_error and readout_error are single-qubit calibration parameters.",
-        "CZ errors are kept in a separate edge-level table because each cz_error_i_j belongs to a directed two-qubit coupling, not to a single qubit row.",
-        "Observed calibration targets are not overwritten by imputations; causal last-observation features are added separately with an age column so downstream models can account for measurement staleness.",
-        "Environmental values are aligned by backend and timestamp and only forward-filled within a bounded causal window, preventing future information from entering features.",
-        "Rolling features use closed='left', so summaries at time t use only observations strictly before t.",
-        "Fault labels are defined from future observed errors within 24h; with the default quantile threshold this is a descriptive critical-error definition, not a fitted model parameter.",
-        "Outlier clipping is disabled by default because extreme errors may be genuine degradation events, which are scientifically relevant for fault tolerance.",
-    ]
-
-
-def write_dataframe(df: pd.DataFrame, path: Path) -> None:
-    if path.suffix == ".parquet":
-        df.to_parquet(path, index=False)
-    elif path.suffix == ".csv":
-        df.to_csv(path, index=False)
-    else:
-        raise ValueError(f"Unsupported output format: {path}")
-
-
 def write_outputs(
     outputs: dict[str, pd.DataFrame],
     cfg: dict[str, Any],
@@ -694,7 +678,6 @@ def write_outputs(
     report_path = out_dir / output_cfg["report"]
     paths["report"] = str(report_path)
     report["outputs"] = paths
-    report["theoretical_rationale"] = theoretical_rationale()
 
     with report_path.open("w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, default=str)
@@ -711,7 +694,6 @@ def run(config_path: Path = SCRIPT_DIR / "preprocessing_config.toml") -> dict[st
     report: dict[str, Any] = {"config_path": str(config_path)}
 
     raw = load_raw_dataset(cfg, report)
-    summarize_raw_dataset(raw, cfg, report)
 
     required = [cols["backend"], cols["qubit"], cols["property"], cols["value"], cols["model_time"]]
     validate_required_columns(raw, required)
@@ -753,11 +735,6 @@ def run(config_path: Path = SCRIPT_DIR / "preprocessing_config.toml") -> dict[st
 
     write_outputs(outputs, cfg, report, config_path)
     return outputs
-
-
-def main(config_path: Path = SCRIPT_DIR / "preprocessing_config.toml") -> pd.DataFrame:
-    outputs = run(config_path)
-    return outputs["fault_prediction"]
 
 
 if __name__ == "__main__":

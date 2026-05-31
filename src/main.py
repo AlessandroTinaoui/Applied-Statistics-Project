@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from dataset.preprocess import main as run_preprocessing  # noqa: E402
+from dataset.preprocess import run as run_preprocessing  # noqa: E402
 
 
 def main() -> None:
@@ -29,7 +29,8 @@ def main() -> None:
     # Fase A: Data Engineering & Wrangling
     # --------------------------------------------------------------------------
     print("\n[Fase A] Preprocessing dataset Qiskit Calibration Drift...")
-    df = run_preprocessing()
+    outputs = run_preprocessing()
+    df = outputs["fault_prediction"]
     print(f"\n[Fase A] Completata. Dataset shape: {df.shape}")
 
     # --------------------------------------------------------------------------
