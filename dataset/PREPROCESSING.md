@@ -289,9 +289,6 @@ This document summarizes, in bullet points, what
 - Fault prediction outputs:
   - `qiskit_fault_prediction_24h.parquet`;
   - `qiskit_fault_prediction_24h.csv`.
-- Legacy alias outputs:
-  - `qiskit_calibration_drift_ml_ready.parquet`;
-  - `qiskit_calibration_drift_ml_ready.csv`.
 - JSON report:
   - `qiskit_calibration_drift_report.json`.
 

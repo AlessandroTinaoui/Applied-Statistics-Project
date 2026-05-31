@@ -83,13 +83,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "statistics": ["mean", "max", "min", "std", "count"],
         "include_last_previous_value": True,
     },
-    "splits": {
-        "enabled": False,
-        "train_ratio": 0.70,
-        "validation_ratio": 0.15,
-        "test_ratio": 0.15,
-        "split_column": "split",
-    },
     "fault_prediction": {
         "enabled": True,
         "horizon": "24h",
@@ -101,11 +94,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "outliers": {
         "enabled": False,
     },
-    "scaling": {
-        "enabled": False,
-        "fit_on_split": "train",
-        "suffix": "_z",
-    },
     "output": {
         "directory": ".",
         "qubit_snapshot_parquet": "qiskit_qubit_snapshots.parquet",
@@ -114,15 +102,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "edge_snapshot_csv": "qiskit_edge_snapshots.csv",
         "fault_prediction_parquet": "qiskit_fault_prediction_24h.parquet",
         "fault_prediction_csv": "qiskit_fault_prediction_24h.csv",
-        "legacy_ml_ready_parquet": "qiskit_calibration_drift_ml_ready.parquet",
-        "legacy_ml_ready_csv": "qiskit_calibration_drift_ml_ready.csv",
         "report": "qiskit_calibration_drift_report.json",
     },
 }
 
-ID_COLUMNS = {"backend", "qubit", "q1", "q2", "model_time", "split"}
+ID_COLUMNS = {"backend", "qubit", "q1", "q2", "model_time"}
 
 
+#------------------------------------------------------------#
+#                           Utils                            #
+#------------------------------------------------------------#
 def deep_update(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     out = dict(base)
     for key, value in override.items():
@@ -232,7 +221,7 @@ def load_raw_dataset(cfg: dict[str, Any], report: dict[str, Any]) -> pd.DataFram
     report["raw_columns"] = list(df.columns)
     return df
 
-
+# cosa fa, crea report del dataset, non so se fondamentale
 def summarize_raw_dataset(df: pd.DataFrame, cfg: dict[str, Any], report: dict[str, Any]) -> None:
     cols = cfg["columns"]
     report["raw_missingness"] = {
@@ -250,7 +239,7 @@ def summarize_raw_dataset(df: pd.DataFrame, cfg: dict[str, Any], report: dict[st
         "nunique": int(df[cols["qubit"]].nunique(dropna=True)),
     }
 
-
+# cosa fa trasforma dataset in formato wide 
 def pivot_properties(
     df: pd.DataFrame,
     id_cols: list[str],
@@ -269,7 +258,7 @@ def pivot_properties(
     wide.columns = [sanitize_column_name(c) for c in wide.columns]
     return wide
 
-
+#cosa fa forward fill
 def time_limited_forward_fill(
     df: pd.DataFrame,
     group_cols: list[str],
@@ -297,7 +286,7 @@ def time_limited_forward_fill(
 
     return pd.concat(out, ignore_index=True)
 
-
+#cosa fa, aggiunge last observation feature (per ogni qubit)
 def add_last_observation_features(
     df: pd.DataFrame,
     group_cols: list[str],
@@ -344,7 +333,7 @@ def add_last_observation_features(
 
     return pd.concat(out, ignore_index=True), added
 
-
+#cosa fa aggiunge feature 
 def build_environment_features(
     df: pd.DataFrame,
     cfg: dict[str, Any],
@@ -387,7 +376,7 @@ def build_environment_features(
     report["rolling_feature_count"] = len(rolling_cols)
     return features, feature_cols
 
-
+#cosa fa: sliding window sulle info precedenti
 def add_rolling_features(env: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, list[str]]:
     backend_col = cfg["columns"]["backend"]
     roll_cfg = cfg["rolling"]
@@ -439,13 +428,11 @@ def add_rolling_features(env: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.Dat
 
 
 
-
-
 def merge_environment(df: pd.DataFrame, env_features: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
     backend_col = cfg["columns"]["backend"]
     return df.merge(env_features, on=[backend_col, "model_time"], how="left", validate="many_to_one")
 
-
+#cosa fa costruisce il dataset dei qubit
 def build_qubit_snapshots(
     df: pd.DataFrame,
     env_features: pd.DataFrame,
@@ -501,7 +488,7 @@ def build_qubit_snapshots(
     report["qubit_history_feature_columns"] = history_features
     return qubit.sort_values(id_cols).reset_index(drop=True), requested_clean
 
-
+#cosa fa costruisce dataset degli edge
 def build_edge_snapshots(
     df: pd.DataFrame,
     env_features: pd.DataFrame,
@@ -532,7 +519,7 @@ def build_edge_snapshots(
     report["edge_unique_directed_edges"] = int(edge[["backend", "q1", "q2"]].drop_duplicates().shape[0])
     return edge.sort_values([cols["backend"], "q1", "q2", "model_time"]).reset_index(drop=True)
 
-
+#cosa fa aggiunge i target: dal futuro
 def add_future_fault_labels(
     qubit: pd.DataFrame,
     cfg: dict[str, Any],
@@ -615,7 +602,7 @@ def add_future_fault_labels(
 
     return fault.sort_values(["backend", "qubit", "model_time"]).reset_index(drop=True)
 
-
+#cosa fa
 def drop_low_information_columns(
     df: pd.DataFrame,
     cfg: dict[str, Any],
@@ -644,7 +631,7 @@ def drop_low_information_columns(
         return df
     return df.drop(columns=to_drop)
 
-
+#cosa fa
 def numeric_feature_columns(df: pd.DataFrame, cfg: dict[str, Any]) -> list[str]:
     split_col = cfg["splits"].get("split_column", "split")
     excluded_suffixes = ("_was_missing", "_fault_24h")
@@ -659,7 +646,7 @@ def numeric_feature_columns(df: pd.DataFrame, cfg: dict[str, Any]) -> list[str]:
 
 
 
-
+#cosa fa
 def summarize_processed_dataset(
     df: pd.DataFrame,
     dataset_name: str,
@@ -714,7 +701,7 @@ def write_outputs(
     paths: dict[str, str] = {}
 
     mapping = {
-        "qubit_snapshot": ["qubit_snapshot_parquet", "qubit_snapshot_csv", "legacy_ml_ready_parquet", "legacy_ml_ready_csv"],
+        "qubit_snapshot": ["qubit_snapshot_parquet", "qubit_snapshot_csv"],
         "edge_snapshot": ["edge_snapshot_parquet", "edge_snapshot_csv"],
         "fault_prediction": ["fault_prediction_parquet", "fault_prediction_csv"],
     }
@@ -739,6 +726,10 @@ def write_outputs(
         json.dump(report, f, indent=2, default=str)
 
 
+
+#-----------------------------------------------------------------------#
+#                               main script                             #
+#-----------------------------------------------------------------------#
 def run(config_path: Path = SCRIPT_DIR / "preprocessing_config.toml") -> dict[str, pd.DataFrame]:
     config_path = resolve_config_path(config_path)
     cfg = load_config(config_path)
