@@ -221,7 +221,7 @@ def load_raw_dataset(cfg: dict[str, Any], report: dict[str, Any]) -> pd.DataFram
     report["raw_columns"] = list(df.columns)
     return df
 
-# cosa fa, crea report del dataset, non so se fondamentale
+
 def summarize_raw_dataset(df: pd.DataFrame, cfg: dict[str, Any], report: dict[str, Any]) -> None:
     cols = cfg["columns"]
     report["raw_missingness"] = {
@@ -239,7 +239,7 @@ def summarize_raw_dataset(df: pd.DataFrame, cfg: dict[str, Any], report: dict[st
         "nunique": int(df[cols["qubit"]].nunique(dropna=True)),
     }
 
-# cosa fa trasforma dataset in formato wide 
+
 def pivot_properties(
     df: pd.DataFrame,
     id_cols: list[str],
@@ -258,7 +258,7 @@ def pivot_properties(
     wide.columns = [sanitize_column_name(c) for c in wide.columns]
     return wide
 
-#cosa fa forward fill
+
 def time_limited_forward_fill(
     df: pd.DataFrame,
     group_cols: list[str],
@@ -286,7 +286,7 @@ def time_limited_forward_fill(
 
     return pd.concat(out, ignore_index=True)
 
-#cosa fa, aggiunge last observation feature (per ogni qubit)
+
 def add_last_observation_features(
     df: pd.DataFrame,
     group_cols: list[str],
@@ -333,7 +333,7 @@ def add_last_observation_features(
 
     return pd.concat(out, ignore_index=True), added
 
-#cosa fa aggiunge feature 
+
 def build_environment_features(
     df: pd.DataFrame,
     cfg: dict[str, Any],
@@ -376,7 +376,7 @@ def build_environment_features(
     report["rolling_feature_count"] = len(rolling_cols)
     return features, feature_cols
 
-#cosa fa: sliding window sulle info precedenti
+
 def add_rolling_features(env: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, list[str]]:
     backend_col = cfg["columns"]["backend"]
     roll_cfg = cfg["rolling"]
@@ -432,7 +432,7 @@ def merge_environment(df: pd.DataFrame, env_features: pd.DataFrame, cfg: dict[st
     backend_col = cfg["columns"]["backend"]
     return df.merge(env_features, on=[backend_col, "model_time"], how="left", validate="many_to_one")
 
-#cosa fa costruisce il dataset dei qubit
+
 def build_qubit_snapshots(
     df: pd.DataFrame,
     env_features: pd.DataFrame,
@@ -488,7 +488,7 @@ def build_qubit_snapshots(
     report["qubit_history_feature_columns"] = history_features
     return qubit.sort_values(id_cols).reset_index(drop=True), requested_clean
 
-#cosa fa costruisce dataset degli edge
+
 def build_edge_snapshots(
     df: pd.DataFrame,
     env_features: pd.DataFrame,
@@ -519,7 +519,7 @@ def build_edge_snapshots(
     report["edge_unique_directed_edges"] = int(edge[["backend", "q1", "q2"]].drop_duplicates().shape[0])
     return edge.sort_values([cols["backend"], "q1", "q2", "model_time"]).reset_index(drop=True)
 
-#cosa fa aggiunge i target: dal futuro
+
 def add_future_fault_labels(
     qubit: pd.DataFrame,
     cfg: dict[str, Any],
@@ -602,10 +602,9 @@ def add_future_fault_labels(
 
     return fault.sort_values(["backend", "qubit", "model_time"]).reset_index(drop=True)
 
-#cosa fa
+
 def drop_low_information_columns(
     df: pd.DataFrame,
-    cfg: dict[str, Any],
     dataset_name: str,
     report: dict[str, Any],
     protected_cols: set[str] | None = None,
@@ -614,8 +613,7 @@ def drop_low_information_columns(
         return df
 
     protected = set(protected_cols or set())
-    split_col = cfg["splits"].get("split_column", "split")
-    id_like = set(ID_COLUMNS) | {split_col}
+    id_like = set(ID_COLUMNS)
     candidate_cols = [c for c in df.columns if c not in id_like and c not in protected]
 
     all_missing = sorted([c for c in candidate_cols if df[c].isna().all()])
@@ -631,41 +629,18 @@ def drop_low_information_columns(
         return df
     return df.drop(columns=to_drop)
 
-#cosa fa
-def numeric_feature_columns(df: pd.DataFrame, cfg: dict[str, Any]) -> list[str]:
-    split_col = cfg["splits"].get("split_column", "split")
-    excluded_suffixes = ("_was_missing", "_fault_24h")
-    numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    return [
-        c for c in numeric
-        if c not in ID_COLUMNS
-        and c != split_col
-        and not c.endswith(excluded_suffixes)
-        and c != "fault_24h"
-    ]
 
-
-
-#cosa fa
 def summarize_processed_dataset(
     df: pd.DataFrame,
     dataset_name: str,
     report: dict[str, Any],
-    cfg: dict[str, Any],
 ) -> None:
-    split_col = cfg["splits"].get("split_column", "split")
     report[f"{dataset_name}_shape"] = list(df.shape)
-    if split_col in df.columns:
-        report[f"{dataset_name}_split_counts"] = df[split_col].value_counts(dropna=False).astype(int).to_dict()
     report[f"{dataset_name}_missingness"] = {
         col: float(rate)
         for col, rate in df.isna().mean().sort_values(ascending=False).items()
         if rate > 0
     }
-    if "fault_24h" in df.columns and split_col in df.columns:
-        report[f"{dataset_name}_fault_rate_by_split"] = (
-            df.groupby(split_col, observed=True)["fault_24h"].mean().to_dict()
-        )
 
 
 def theoretical_rationale() -> list[str]:
@@ -675,7 +650,6 @@ def theoretical_rationale() -> list[str]:
         "Observed calibration targets are not overwritten by imputations; causal last-observation features are added separately with an age column so downstream models can account for measurement staleness.",
         "Environmental values are aligned by backend and timestamp and only forward-filled within a bounded causal window, preventing future information from entering features.",
         "Rolling features use closed='left', so summaries at time t use only observations strictly before t.",
-        "No split column is emitted by default: the modelling split is intentionally left to the downstream analysis so it can be chosen manually and documented for each research question.",
         "Fault labels are defined from future observed errors within 24h; with the default quantile threshold this is a descriptive critical-error definition, not a fitted model parameter.",
         "Outlier clipping is disabled by default because extreme errors may be genuine degradation events, which are scientifically relevant for fault tolerance.",
     ]
@@ -752,27 +726,22 @@ def run(config_path: Path = SCRIPT_DIR / "preprocessing_config.toml") -> dict[st
 
     qubit = drop_low_information_columns(
         qubit,
-        cfg,
         "qubit_snapshot",
         report,
         protected_cols=set(qubit_properties) | {"calibration_lag_hours"},
     )
     edge = drop_low_information_columns(
         edge,
-        cfg,
         "edge_snapshot",
         report,
         protected_cols={"cz_error", "calibration_lag_hours"},
     )
     fault = drop_low_information_columns(
         fault,
-        cfg,
         "fault_prediction",
         report,
         protected_cols=set(qubit_properties) | {"fault_24h"},
     )
-
-
 
     outputs = {
         "qubit_snapshot": qubit,
@@ -780,7 +749,7 @@ def run(config_path: Path = SCRIPT_DIR / "preprocessing_config.toml") -> dict[st
         "fault_prediction": fault,
     }
     for name, frame in outputs.items():
-        summarize_processed_dataset(frame, name, report, cfg)
+        summarize_processed_dataset(frame, name, report)
 
     write_outputs(outputs, cfg, report, config_path)
     return outputs

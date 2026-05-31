@@ -43,7 +43,6 @@ This document summarizes, in bullet points, what
   - regex for edge-level errors;
   - environmental columns;
   - rolling windows;
-  - optional temporal split;
   - fault prediction labels;
   - CSV/parquet/report output names.
 
@@ -210,19 +209,6 @@ This document summarizes, in bullet points, what
 - Merges current and rolling environmental features.
 - Keeps edge-level data separate from qubit-level data to avoid mixing node features and edge features.
 
-## Optional Temporal Split
-
-- The script can emit a `split` column, but this is disabled by default.
-- If enabled, it computes chronological cutoffs from:
-  - `train_ratio`;
-  - `validation_ratio`;
-  - `test_ratio`.
-- Assigns rows to:
-  - `train`;
-  - `validation`;
-  - `test`.
-- Does not use random splitting because the data are temporal.
-- With the current configuration, the temporal split is left to the modelling stage.
 
 ## 24-Hour Fault Prediction Labels
 
@@ -250,8 +236,8 @@ This document summarizes, in bullet points, what
   - 95th percentile of the observed target distribution.
 - Saves the thresholds in the JSON report.
 - Methodological note:
-  - the global quantile is a descriptive critical-error definition;
-  - stricter modelling can use `train_quantile` with an enabled temporal split, or define thresholds after splitting.
+  - thresholds are computed from past observations only;
+  - stricter modelling can still define thresholds inside downstream temporal validation.
 
 ## Low-Information Column Removal
 
@@ -271,10 +257,8 @@ This document summarizes, in bullet points, what
 - Uses numeric non-ID features.
 - Excludes:
   - ID columns;
-  - split column;
   - missing indicators;
   - fault labels.
-- If a split exists, it can fit means and standard deviations on the training split only.
 - With the current configuration, scaling is intentionally left to the modelling pipeline.
 
 ## Outputs
