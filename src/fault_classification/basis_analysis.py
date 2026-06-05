@@ -148,6 +148,24 @@ def run_baseline_experiments(df: pd.DataFrame):
     plt.savefig(RESULTS_DIR / "pr_roc_curves.png", dpi=150)
     plt.close()
     
+    # Evaluate Confusion Matrix for RF with optimal threshold
+    rf_precisions, rf_recalls, rf_thresholds = precision_recall_curve(y_test, rf_probs)
+    rf_f1_scores = 2 * (rf_precisions * rf_recalls) / (rf_precisions + rf_recalls + 1e-8)
+    opt_idx = np.argmax(rf_f1_scores)
+    opt_thresh = rf_thresholds[opt_idx] if opt_idx < len(rf_thresholds) else 0.5
+    
+    rf_pred_opt = (rf_probs >= opt_thresh).astype(int)
+    cm = confusion_matrix(y_test, rf_pred_opt)
+    
+    # Plot Confusion Matrix
+    plt.figure(figsize=(8, 6))
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['No Fault', 'Fault'])
+    disp.plot(cmap='Blues', values_format='d', ax=plt.gca())
+    plt.title(f'Random Forest Confusion Matrix\n(Optimal Threshold = {opt_thresh:.3f})')
+    plt.tight_layout()
+    plt.savefig(RESULTS_DIR / "rf_confusion_matrix.png", dpi=150)
+    plt.close()
+    
     # Extract feature names
     cat_encoder = preprocessor.named_transformers_['cat'].named_steps['onehot']
     encoded_cat_cols = cat_encoder.get_feature_names_out(cat_cols)
