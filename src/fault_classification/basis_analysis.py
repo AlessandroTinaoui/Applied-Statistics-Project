@@ -199,7 +199,65 @@ def run_baseline_experiments(df: pd.DataFrame):
     plt.tight_layout()
     plt.savefig(RESULTS_DIR / "lr_coefficients.png", dpi=150)
     plt.close()
+
+    # -----------------------------------------------------------------------------
+    # Ablation study (training without outliers)
+    print("\n" + "="*60)
+    print("ABLATION STUDY: Training WITHOUT Influential Points")
+    print("="*60)
+        
+    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in ['backend', 'qubit', 'model_time', 'fault_24h']]
+    imp = SimpleImputer(strategy='median')
+    X_num = imp.fit_transform(df[numeric_cols])
+    sc = StandardScaler()
+    X_scaled = sc.fit_transform(X_num)
     
+    # Sample for covariance to speed up
+    np.random.seed(42)
+    sample_idx = np.random.choice(len(X_scaled), min(10000, len(X_scaled)), replace=False)
+    sample = X_scaled[sample_idx]
+    cov_matrix = np.cov(sample, rowvar=False)
+    inv_cov_matrix = np.linalg.pinv(cov_matrix)
+    mean_dist = sample.mean(axis=0)
+    
+    diff = X_scaled - mean_dist
+    left_term = np.dot(diff, inv_cov_matrix)
+    mahalanobis_sq = np.sum(left_term * diff, axis=1)
+    
+    p_values = 1 - chi2.cdf(mahalanobis_sq, X_scaled.shape[1])
+    is_outlier = p_values < 0.001
+    
+    print(f"Dropping {is_outlier.sum()} outliers (p < 0.001)...")
+    
+    df_no_outliers = df[~is_outlier].copy()
+    y_no_out = df_no_outliers['fault_24h'].values
+    X_no_out = df_no_outliers.drop(columns=['fault_24h'])
+    
+    # Retrain on last fold of clean data
+    train_idx = int(len(X_no_out) * 0.75)
+    X_train_clean, X_test_clean = X_no_out.iloc[:train_idx], X_no_out.iloc[train_idx:]
+    y_train_clean, y_test_clean = y_no_out[:train_idx], y_no_out[train_idx:]
+    
+    print(f"Retraining Logistic Regression on {len(X_train_clean)} normal samples...")
+    lr_clean = Pipeline([
+        ('preprocessor', build_preprocessing_pipeline(df_no_outliers)[0]),
+        ('classifier', LogisticRegression(class_weight='balanced', max_iter=1000, random_state=42))
+    ])
+    lr_clean.fit(X_train_clean, y_train_clean)
+    y_pred_proba_clean = lr_clean.predict_proba(X_test_clean)[:, 1]
+    
+    pr_auc_clean = average_precision_score(y_test_clean, y_pred_proba_clean)
+    roc_auc_clean = roc_auc_score(y_test_clean, y_pred_proba_clean)
+    
+    precisions_c, recalls_c, thresholds_c = precision_recall_curve(y_test_clean, y_pred_proba_clean)
+    f1_scores_c = 2 * (precisions_c * recalls_c) / (precisions_c + recalls_c + 1e-8)
+    opt_idx_c = np.argmax(f1_scores_c)
+    opt_thresh_c = thresholds_c[opt_idx_c] if opt_idx_c < len(thresholds_c) else 0.5
+    f1_clean = np.max(f1_scores_c)
+    
+    print(f"Results WITHOUT outliers:")
+    print(f"  - Logistic Regression -> PR-AUC: {pr_auc_clean:.4f} | ROC-AUC: {roc_auc_clean:.4f} | F1: {f1_clean:.4f} (Thresh: {opt_thresh_c:.3f})")
+
 
 if __name__ == "__main__":
     dataset_path = Path("dataset/qiskit_fault_prediction_24h.parquet")
