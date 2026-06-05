@@ -6,7 +6,12 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import average_precision_score, roc_auc_score, f1_score, precision_recall_curve, roc_curve, auc
+
+from scipy.stats import chi2
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
+
+from sklearn.metrics import average_precision_score, roc_auc_score, f1_score, precision_recall_curve, roc_curve, auc, confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -14,7 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from fault_classification.data_preparation import (  # noqa: E402
+from fault_classification.data_preparation import (
     build_preprocessing_pipeline,
     load_and_clean_fault_data,
 )
