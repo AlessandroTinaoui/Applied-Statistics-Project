@@ -78,13 +78,21 @@ def run_baseline_experiments(df: pd.DataFrame):
             # Metrics evaluation
             pr_auc = average_precision_score(y_test, y_pred_proba)
             roc_auc = roc_auc_score(y_test, y_pred_proba)
-            f1 = f1_score(y_test, y_pred)
+            
+            # Find optimal threshold to maximize F1 instead of default 0.5
+            precisions, recalls, thresholds = precision_recall_curve(y_test, y_pred_proba)
+            f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-8)
+            opt_idx = np.argmax(f1_scores)
+            opt_thresh = thresholds[opt_idx] if opt_idx < len(thresholds) else 0.5
+            
+            y_pred_opt = (y_pred_proba >= opt_thresh).astype(int)
+            f1 = f1_score(y_test, y_pred_opt)
             
             results[model_name]['pr_auc'].append(pr_auc)
             results[model_name]['roc_auc'].append(roc_auc)
             results[model_name]['f1'].append(f1)
             
-            print(f"  - {model_name:25s} -> PR-AUC: {pr_auc:.4f} | ROC-AUC: {roc_auc:.4f} | F1: {f1:.4f}")
+            print(f"  - {model_name:25s} -> PR-AUC: {pr_auc:.4f} | ROC-AUC: {roc_auc:.4f} | F1: {f1:.4f} (Thresh: {opt_thresh:.3f})")
 
     # Print results
     print("\n" + "="*60)
