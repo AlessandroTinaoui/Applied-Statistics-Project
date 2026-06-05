@@ -30,6 +30,29 @@ def load_and_clean_fault_data(file_path: str | Path) -> pd.DataFrame:
     sparse_cols = nan_ratios[nan_ratios > 0.50].index.tolist()
     df_cleaned = df_cleaned.drop(columns=sparse_cols)
     
+    # Drop collinear features discovered by EDA (VIF = inf)
+    collinear_cols = [c for c in df_cleaned.columns if '_count_' in c]
+
+    # Drop instantaneous error targets (we must use _last_obs instead to avoid leakage)
+    instant_targets = ['sx_error', 'readout_error', 'prob_meas0_prep1', 'prob_meas1_prep0']
+    collinear_cols += [c for c in instant_targets if c in df_cleaned.columns]
+    df_cleaned = df_cleaned.drop(columns=collinear_cols)
+
+    # Further VIF reduction: for each environmental variable, the rolling windows
+    # 6h/12h/24h produce highly correlated features (VIF > 500 for pressure/temperature).
+    # Strategy: keep only {var}, {var}_mean_prev_24h, {var}_std_prev_24h per variable.
+    # This preserves the current level, the recent trend, and the recent variability.
+    env_vars = ['temperature_c', 'pressure_hpa', 'humidity_pct', 'bz_gsm_nt', 'neutron_flux']
+    keep_suffixes = {'_mean_prev_24h', '_std_prev_24h'}
+    redundant_rolling = []
+    for var in env_vars:
+        for col in df_cleaned.columns:
+            if col.startswith(var + '_') and col != var:
+                suffix = col[len(var):]
+                if suffix not in keep_suffixes:
+                    redundant_rolling.append(col)
+    df_cleaned = df_cleaned.drop(columns=redundant_rolling)
+
     # Cast model_time to pdatetime and sort chronologically
     df_cleaned['model_time'] = pd.to_datetime(df_cleaned['model_time'], utc=True)
     df_cleaned = df_cleaned.sort_values(by='model_time').reset_index(drop=True)
