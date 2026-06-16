@@ -17,8 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 from src.regression.data_preparation  import prepare_data
-from src.regression.eda               import run_eda
-from src.regression.feature_selection import run_feature_selection
+from src.regression.eda               import run_eda, run_feature_selection
 from src.regression.linear_model      import run_linear_models, detect_and_remove_outliers
 from src.regression.regularization    import run_regularization
 from src.regression.comparison        import run_comparison
@@ -42,9 +41,6 @@ def main():
 
     _banner(1, "DATA PREPARATION & CHRONOLOGICAL SPLIT")
     data = prepare_data(DATASET_PATH)
-
-    _banner(2, "FEATURE SELECTION & CORRELATION ANALYSIS")
-    run_feature_selection(data["train_df"], save_dir=OUTPUT_DIR / "feature_selection")
 
     _banner(3, "EXPLORATORY DATA ANALYSIS (EDA)")
     run_eda(data["train_df"], save_dir=OUTPUT_DIR / "eda")
