@@ -17,21 +17,19 @@ TARGET = "T1"
 ID_COLUMNS = ["backend", "qubit", "model_time"]
 
 SELECTED_FEATURES = [
-    # Qubit calibration characteristics
     "T1_prev",
     "T2_last_obs",
-    "sx_error_class_last_obs",
+    "sx_error_class_last_obs",      # categorical (binned from sx_error_last_obs)
     "readout_error_last_obs",
 
-    # Calibration ages & lags
+    "prob_meas0_prep1",
+    "prob_meas1_prep0",
     "calibration_lag_hours",
     "T2_last_obs_age_hours",
     "readout_error_last_obs_age_hours",
 
-    # Temporal & solar position
     "solar_zenith_deg",
 
-    # Environmental rolling statistics (24h averages & fluctuations)
     "temperature_c_mean_prev_24h",
     "temperature_c_std_prev_24h",
     "humidity_pct_mean_prev_24h",
@@ -49,6 +47,37 @@ CATEGORICAL_FEATURES = ["backend", "sx_error_class_last_obs"]
 
 # Temporal split ratio (80% train, 20% test)
 TRAIN_RATIO = 0.80
+
+# Missingness threshold: features with >30% missing values in train will be dynamically dropped
+MISSINGNESS_THRESHOLD = 0.30
+
+
+def drop_high_missingness_features(
+    n_df: pd.DataFrame, threshold: float = MISSINGNESS_THRESHOLD
+) -> pd.DataFrame:
+    """
+    Identify and drop features with a missingness rate above the threshold in n_df.
+    This operates on feature columns (excluding ID_COLUMNS and TARGET).
+    """
+    exclude = set(ID_COLUMNS + [TARGET])
+    candidate_features = [c for c in n_df.columns if c not in exclude]
+
+    dropped_cols = []
+    for col in candidate_features:
+        missing_rate = n_df[col].isna().mean()
+        if missing_rate > threshold:
+            dropped_cols.append((col, missing_rate))
+
+    if dropped_cols:
+        print(f"\n[Data Preparation] WARNING: Dropping features due to high missingness (>{threshold:.1%}):")
+        for col, rate in dropped_cols:
+            print(f"  - {col:<40} ({rate:.2%} missing)")
+        cols_to_drop = [col for col, _ in dropped_cols]
+        n_df = n_df.drop(columns=cols_to_drop)
+    else:
+        print(f"\n[Data Preparation] Checked missingness: all candidate features are below {threshold:.1%} missing.")
+
+    return n_df
 
 
 def load_qubit_snapshots(file_path: str | Path) -> pd.DataFrame:
@@ -165,7 +194,11 @@ def prepare_data(file_path: str | Path) -> dict:
         numeric_features     : list of numeric feature column names
     """
     df = load_qubit_snapshots(file_path)
+    df = drop_high_missingness_features(df)
+    
     train_df, test_df = temporal_train_test_split(df)
+    
+    
     X_train, y_train = get_feature_target(train_df)
     X_test, y_test = get_feature_target(test_df)
     preprocessor, numeric_features, _ = build_preprocessing_pipeline(train_df)
