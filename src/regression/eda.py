@@ -78,40 +78,6 @@ def plot_target_by_backend(df: pd.DataFrame, save_dir: Path | None = None):
     plt.close(fig)
 
 
-def plot_scatter_vs_features(df: pd.DataFrame, save_dir: Path | None = None):
-    """Grid of scatter plots: T1 vs each numeric feature (with linear trend line)."""
-    numeric = get_numeric_features(df)
-    n = min(5_000, len(df))
-    sample = df.sample(n=n, random_state=42)
-
-    ncols = 3
-    nrows = (len(numeric) + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows))
-    axes = axes.flatten()
-
-    for i, col in enumerate(numeric):
-        ax = axes[i]
-        ax.scatter(sample[col], sample[TARGET], alpha=0.15, s=8, color="steelblue")
-        ax.set_xlabel(col, fontsize=9)
-        ax.set_ylabel(TARGET, fontsize=9)
-        ax.set_title(col, fontsize=10)
-        valid = sample[[col, TARGET]].dropna()
-        if len(valid) > 10:
-            z = np.polyfit(valid[col], valid[TARGET], 1)
-            x_s = np.sort(valid[col])
-            ax.plot(x_s, np.polyval(z, x_s), color="red", lw=1.5, alpha=0.7)
-
-    for j in range(i + 1, len(axes)):
-        axes[j].set_visible(False)
-
-    fig.suptitle(f"Scatter: {TARGET} vs numeric features (n={n} sample)",
-                 fontsize=14, fontweight="bold", y=1.01)
-    plt.tight_layout()
-    if save_dir:
-        fig.savefig(save_dir / "eda_scatter_features.png")
-    plt.close(fig)
-
-
 def plot_correlation_matrix(df: pd.DataFrame, save_dir: Path | None = None):
     """Pearson correlation heatmap and target correlation ranking."""
     numeric = get_numeric_features(df) + [TARGET]
@@ -129,26 +95,12 @@ def plot_correlation_matrix(df: pd.DataFrame, save_dir: Path | None = None):
     print(corr[TARGET].drop(TARGET).sort_values(ascending=False).to_string())
 
 
-def print_missingness(df: pd.DataFrame):
-    """Print missing-value rates for all columns with at least one NaN."""
-    miss = df.isna().mean().sort_values(ascending=False)
-    miss = miss[miss > 0]
-    print(f"\n[EDA] Missing values (features with > 0% NaN):")
-    if miss.empty:
-        print("  None — all features are fully observed.")
-    else:
-        for col, rate in miss.items():
-            print(f"  {col:40s}  {rate:6.2%}")
-
-
 def run_eda(df: pd.DataFrame, save_dir: Path | None = None):
     """Run all EDA steps."""
     if save_dir:
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
 
-    print_missingness(df)
     plot_target_distribution(df, save_dir)
     plot_target_by_backend(df, save_dir)
-    plot_scatter_vs_features(df, save_dir)
     plot_correlation_matrix(df, save_dir)

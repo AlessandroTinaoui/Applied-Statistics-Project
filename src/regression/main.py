@@ -13,6 +13,9 @@ sys.path.insert(0, str(ROOT))
 
 pd.options.display.float_format = "{:.6f}".format
 
+import matplotlib
+matplotlib.use("Agg")
+
 from src.regression.data_preparation  import prepare_data
 from src.regression.eda               import run_eda
 from src.regression.feature_selection import run_feature_selection
