@@ -5,156 +5,143 @@
 
 ## 1. Obiettivo e domanda di ricerca
 
-Mentre le parti di regression e fault prediction lavorano a livello di
-*snapshot temporale*, qui la domanda è diversa: **esistono gruppi naturali
-tra i qubit, e questa struttura è spiegata dalla macchina di appartenenza
-(backend)?**
-
-Ipotesi: i qubit dello stesso computer quantistico condividono un'impronta di
-calibrazione che li rende distinguibili da quelli di altre macchine.
+Domanda puramente **non supervisionata**: **esistono strutture consistenti tra
+i qubit?** Tutta l'analisi (PCA, embedding, clustering) è condotta **senza
+etichette**. Solo alla fine (§8) introduciamo il `backend` (la macchina) come
+**chiave di lettura a posteriori**, per interpretare le strutture emerse — mai
+per addestrare un modello.
 
 ## 2. Unità statistica e costruzione delle feature
 
-Il punto metodologico chiave è la scelta dell'**unità statistica**. Per
-cercare struttura *tra i qubit* l'unità deve essere il qubit, non lo
-snapshot. Collassiamo quindi la dimensione temporale costruendo **un profilo
-per `(backend, qubit)`** — `468` qubit in totale (`156` per ciascuno dei tre
-backend `ibm_fez`, `ibm_kingston`, `ibm_marrakesh`).
+L'unità statistica è il **qubit**, non lo snapshot: ogni qubit è una serie
+temporale di calibrazioni, che collassiamo in **un profilo per `(backend,
+qubit)`** — `468` qubit (`156` × 3 backend). Per ogni proprietà aggreghiamo nel
+tempo con **mediana** (valore tipico) e **IQR** (drift), più **fail_frac** (per
+gli errori) — statistiche robuste agli spike di calibrazione fallita.
 
-**Gestione dei NaN.** Le proprietà di calibrazione grezze (`T1`, `T2`,
-`sx_error`, `readout_error`, `prob_meas*`) sono 73–96% NaN *per snapshot*,
-perché le calibrazioni sono asincrone. Non imputiamo a livello di snapshot
-(significherebbe inventare dati): aggreghiamo nel tempo usando **solo le
-misure reali** (i NaN vengono ignorati). Pooling di ~24 giorni di snapshot dà
-abbastanza osservazioni per stimare per ogni qubit:
+**Selezione delle feature guidata dalla matrice di correlazione.** Si ottengono
+**9 feature**: `T1_median/iqr`, `T2_median/iqr`, `readout_error_median/iqr`,
+`sx_error_fail_frac`, `readout_error_fail_frac`, `calibration_lag_median`.
+Rispetto al set grezzo abbiamo tolto:
 
-- `<prop>_median` — il valore tipico di esercizio (stimatore robusto);
-- `<prop>_iqr` — lo scarto interquartile = drift/variabilità temporale robusta;
-- per gli errori di gate/readout, `<prop>_fail_frac` — la frazione di
-  calibrazioni fallite (valore degenere ≈ 1.0), proxy diretto di instabilità.
+- le famiglie **`prob_meas0/1`**, ridondanti (`readout_error` ≈ media delle due
+  → blocco di lettura "contato tre volte");
+- **`sx_error_median`/`sx_error_iqr`**: `sx_error` è **bimodale** (~0 nel regime
+  normale, esattamente 1.0 sulle calibrazioni fallite), quindi median/IQR sono
+  distorte dagli spike; teniamo solo `sx_error_fail_frac`,
+  che è la sintesi numerica pulita del regime di fallimento.
 
-Si ottengono **15 feature intrinseche** per qubit. Solo dopo l'aggregazione
-imputiamo i NaN residui con la mediana e **standardizziamo** (z-score). Le
-feature con missingness > 40% verrebbero scartate; con la soglia attuale tutte
-le 15 sopravvivono.
+**Gestione dei NaN.** Le proprietà grezze sono 73–96% NaN *per snapshot*: non
+imputiamo lì, aggreghiamo sulle sole misure reali. I NaN residui del profilo
+sono imputati con la mediana.
 
 ## 3. Standardizzazione
 
-Ho applicato lo **z-score** (`StandardScaler`). È necessario perché le feature
-vivono su scale incomparabili (T1 ~1e-4, errori ~1e-3, fail_frac ~0–1) e sia
-la **PCA** sia il **clustering euclideo** non sono invarianti di scala: senza
-standardizzare, le variabili con ordine di grandezza maggiore dominerebbero.
+**z-score** (`StandardScaler`): le feature vivono su scale incomparabili e sia
+la PCA sia il clustering euclideo non sono invarianti di scala.
 
-## 4. PCA ed EDA
+## 4. PCA ed EDA — con outlier
 
-La PCA sullo spazio standardizzato (15 feature) mostra una varianza
-**distribuita**, non dominata da un singolo asse: servono **7 componenti per
-il 90%** della varianza.
+La PCA mostra varianza **bilanciata** (6 componenti per il 90%):
 
-| Componente | Var. spiegata | Cumulata | Interpretazione (loadings) |
-|---|---|---|---|
-| PC1 | 34,9% | 34,9% | **Asse "errore/salute"**: readout_error (0.42), sx_error_fail_frac (0.37), sx_error (0.35), prob_meas (0.35–0.38) |
-| PC2 | 18,0% | 52,8% | **Asse "coerenza"**: T2_median (0.49), T1_median (0.48), T2_iqr (0.43), T1_iqr (0.38), calibration_lag (−0.34) |
-| PC3 | 14,0% | 66,8% | Variabilità readout/misura (iqr) |
-
-La lettura fisica è netta: la prima sorgente di variabilità tra i qubit non è
-*quale macchina* ma *quanto è in salute* il qubit (errori complessivi); la
-coerenza T1/T2 è un asse secondario e ortogonale.
-
-Nel piano PC1–PC2 (`figures/pca_scores_by_backend.png`) i backend si
-sovrappongono ampiamente e una lunga coda lungo PC1 isola pochi qubit ad
-altissimo errore. La PCA lineare, da sola, **non** separa i backend.
-
-## 5. Embedding non lineari (t-SNE / UMAP)
-
-Qui cambia tutto. L'embedding **UMAP** (`figures/umap_embedding.png`) mostra
-**tre territori ben distinti per backend**: `ibm_kingston`, `ibm_fez` e
-`ibm_marrakesh` occupano regioni separate. Questo segnala che la struttura per
-backend è **non lineare**: esiste, ma vive su una varietà che la PCA lineare e
-il clustering globale euclideo non catturano direttamente.
-
-## 6. Clustering e confronto con il backend
-
-**K-Means / Ward globali.** Il criterio silhouette seleziona `k = 2` con
-silhouette molto alta (0,807) — ma è un artefatto: la spaccatura separa un
-gruppetto di **11 qubit anomali** (cluster minoritario) dal resto. Il
-dendrogramma di Ward (`figures/dendrogram.png`) conferma visivamente: un
-piccolo ramo si stacca a distanza ~64 dal blocco principale. La **silhouette
-delle etichette backend** nello spazio delle feature è bassa (0,085): preso
-alla lettera, questo direbbe "nessuna separazione". Ma è ingannevole, perché il
-k=2 è dominato dagli outlier e la struttura per backend è non lineare. Due
-controlli risolvono l'ambiguità.
-
-**(a) Recuperabilità del backend (kNN cross-validato).** Misura *locale* di
-separabilità: il backend è leggibile dal profilo del qubit? Uso un
-classificatore k-nearest-neighbors con **cross-validation stratificata a 5
-fold** (ogni fold conserva le proporzioni dei backend).
-
-| Etichetta | Accuratezza kNN (5-fold) | Caso base (classe maggioritaria) |
+| Componente | Var. | Interpretazione (loadings) |
 |---|---|---|
-| **backend** | **0,876 ± 0,033** | 0,333 |
+| PC1 | 30,7% | **Coerenza / qualità**: T1_median 0.45, T2_median 0.43, T1/T2_iqr ~0.40 (+); readout_error −0.29, sx_error_fail_frac −0.27, calibration_lag −0.30 |
+| PC2 | 25,9% | **Errori**: readout_error 0.53, sx_error_fail_frac 0.47, readout_error_fail_frac 0.45 |
 
-Il backend è recuperabile all'**87,6%** contro un caso base del 33,3%:
-fortissima conferma dell'ipotesi e dell'evidenza UMAP. Una metrica *locale*
-come il kNN cattura la struttura non lineare che la silhouette globale non
-vede.
+I due assi interpretabili — **coerenza (PC1)** ed **errori (PC2)** — sono ora
+distinti e netti. Nel piano PC1–PC2 (`figures/pca_scores.png`) la maggioranza
+dei qubit forma un blocco, con una **coda di pochi qubit ad altissimo errore**
+(outlier) lungo PC2.
 
-**(b) Clustering robusto.** Rimossi gli 11 qubit anomali, il K-Means sui `457`
-qubit "normali" seleziona spontaneamente **k = 3** (= numero di backend). La
-figura `figures/robust_clusters_vs_backend.png` (scatter PCA: a sinistra per
-cluster, a destra per backend) e la contingenza
-`tables/contingency_robust_backend.csv` mostrano l'allineamento:
+## 5. Embedding non lineari (UMAP / t-SNE)
 
-| cluster robusto | ibm_fez | ibm_kingston | ibm_marrakesh |
+L'UMAP (`figures/umap_embedding.png`) rivela **regioni ben separate** → la
+struttura è in parte **non lineare**. Usato solo per **visualizzare**: non
+clusterizziamo su UMAP (distorce le distanze).
+
+## 6. Clustering con outlier: DBSCAN
+
+Con gli outlier presenti, il metodo giusto è **density-based**. **DBSCAN**
+assegna ai qubit a bassa densità l'etichetta **noise** (−1) invece di forzarli
+in un cluster: gestisce gli outlier **nativamente**, senza rimozione manuale e
+senza creare singleton (a differenza del K-Means). Trova **2 cluster + 47 noise**
+(`figures/dbscan_clusters.png`, `figures/dbscan_cluster_profiles.png`):
+
+| cluster | n | T1 mediana | readout_error | lettura |
+|---|---|---|---|---|
+| 1 | 130 | ~272 µs | 0,012 | **alta coerenza**, errori bassi |
+| 0 | 291 | ~171 µs | 0,018 | **coerenza più bassa** |
+| noise | 47 | ~244 µs | **0,107** | qubit **degradati** (20% di fallimenti `sx_error`) = pre-guasti |
+
+I due cluster si dividono per **coerenza** (T1/T2), non per errori; il **noise**
+raccoglie i qubit degradati — gli stessi "pre-guasti" della fault prediction dei
+colleghi (isolati con la distanza di Mahalanobis). Lista in
+`tables/dbscan_cluster_means.csv`.
+
+## 7. Rimozione degli outlier — PCA & UMAP
+
+Mettendo da parte i qubit degradati, la **PCA resta sull'asse della coerenza**
+(`figures/pca_loadings_clean.png`, `figures/pca_scores_clean.png`): PC1 = T1/T2
+(T1_median 0.52, T2_median 0.49, T2_iqr 0.43, T1_iqr 0.41, calibration_lag
+−0.37), e tra i qubit sani gli errori sono ≈ costanti (loadings ≈ 0). Bastano
+**5 componenti** per il 90%. Anche l'UMAP pulito (`figures/umap_embedding_clean.png`)
+mostra le stesse regioni più nitide.
+
+## 8. Clustering senza outlier: DBSCAN vs K-Means
+
+Tolti gli outlier, confrontiamo i due workflow.
+
+- **K-Means (partizionale).** Forzato a `k=3`, dà gruppi 254/113/86 , ma **non ricostruisce
+  bene le macchine**: `fez` si separa (149/154), mentre `kingston` è spaccato
+  (83 + 56) e `marrakesh` è sparso — accordo col backend ~57%. Il K-Means impone
+  cluster sferici e fatica su una struttura **non sferica a due livelli**.
+- **DBSCAN (density-based).** Trova i **2 gruppi reali** in modo pulito
+  (`figures/cluster_profiles.png` vs `figures/dbscan_cluster_profiles_clean.png`).
+
+Messaggio metodologico: su questa struttura, il **partizionale (K-Means) fatica**
+mentre il **density-based (DBSCAN) la cattura**. Il K-Means serve quindi come
+**baseline di confronto** (mostra perché serve DBSCAN), non come soluzione.
+
+## 9. Interpretazione a posteriori: il backend
+
+Solo ora leggiamo i cluster DBSCAN con l'etichetta `backend`
+(`tables/dbscan_contingency_backend.csv`):
+
+| cluster DBSCAN | ibm_fez | ibm_kingston | ibm_marrakesh |
 |---|---|---|---|
-| 0 | 151 | 16 | 112 |
-| 1 | 3 | **134** | 40 |
-| 2 | 0 | 1 | 0 |
+| noise (−1) | 5 | 26 | 16 |
+| 0 | 151 | 0 | 140 |
+| 1 | 0 | **130** | 0 |
 
-`ibm_kingston` si isola in modo quasi puro (cluster 1: 134 dei suoi 154
-qubit), mentre `ibm_fez` e `ibm_marrakesh` si fondono nel cluster 0. Quindi la
-struttura per backend, mascherata dagli outlier, riemerge appena si toglie il
-rumore. Che l'accordo non sia perfetto si spiega così: **due macchine su tre
-hanno profili linearmente molto simili** e vengono separate solo
-dall'embedding non lineare (UMAP). È coerente con la regression, dove
-`ibm_kingston` mostrava lo shift di baseline T1 più marcato.
+`ibm_kingston` è isolato al **100%** (cluster 1, 130 qubit puri), `ibm_fez` e
+`ibm_marrakesh` sono **fusi** nel cluster 0, gli anomali nel noise. Incrociando
+con le medie, il cluster di kingston è quello a **T1/T2 più alti**: **kingston
+è la macchina ad alta coerenza** — l'asse fisico (coerenza) e l'identità della
+macchina coincidono, ed è lo stesso shift di baseline T1 visto dalla regression.
 
-## 7. I qubit anomali
+## 10. Conclusioni
 
-Gli 11 qubit del cluster outlier (2,4% del totale) sono distribuiti su tutte e
-tre le macchine — `ibm_fez` (2), `ibm_kingston` (5), `ibm_marrakesh` (4) — e
-sono caratterizzati da errori di gate/readout estremi e alta frazione di
-calibrazioni fallite (estremo di PC1). Sono gli stessi "punti di pre-guasto"
-isolati dall'analisi di Mahalanobis e dallo studio di fault prediction dei
-colleghi: il segnale di degrado, non rumore. La lista completa è in
-`tables/anomalous_qubits.csv`.
+1. **Struttura dominante = la "salute" del qubit.** L'asse principale (PC1) è la
+   coerenza/qualità; la struttura più marcata dei dati grezzi è una **coda di
+   qubit degradati** (i 47 punti di noise / gli ~11 più estremi), trasversale
+   alle macchine — i "pre-guasti" della fault prediction.
+2. **Struttura secondaria = la macchina, a due livelli.** I qubit sani si
+   raggruppano in due gruppi di coerenza che corrispondono ai backend: **kingston
+   distinto** (alta coerenza), **fez ≈ marrakesh**. È una struttura **non
+   lineare e non sferica**: la cattura DBSCAN (e UMAP la mostra), il K-Means
+   solo in parte.
 
-## 8. Conclusioni
+**Messaggio metodologico.** Nessuna singola metrica o metodo basta: PCA +
+embedding non lineare + confronto **K-Means vs DBSCAN**. DBSCAN è il metodo di
+elezione (gestisce gli outlier, trova i gruppi reali); il K-Means è il termine
+di paragone; gli outlier sono un *risultato* (i pre-guasti), non solo rumore.
 
-1. **I qubit si separano per backend, ma in modo non lineare.** Ogni qubit
-   porta un'impronta di calibrazione specifica della macchina: il kNN recupera
-   il backend con 87,6% di accuratezza, UMAP separa le tre macchine, e il
-   clustering robusto (senza outlier) trova k=3 con `ibm_kingston` ben isolato.
-   Il raggruppamento interpretabile dei qubit è per computer di appartenenza.
-2. **Asse dominante = salute del qubit, non identità.** La prima sorgente di
-   varianza (PC1, 35%) è l'errore complessivo; la struttura "naturale" dei dati
-   grezzi è un gruppetto di ~11 qubit gravemente degradati, presenti su tutte
-   le macchine.
+## 11. Limiti
 
-**Messaggio metodologico.** Affidarsi a una singola metrica globale
-(silhouette) avrebbe portato alla conclusione sbagliata "i qubit non si
-separano". La combinazione di embedding non lineare (UMAP), recuperabilità
-locale (kNN) e clustering robusto agli outlier mostra invece che la struttura
-per backend c'è ed è forte, semplicemente non lineare e oscurata da pochi
-qubit anomali.
-
-## 9. Limiti
-
-- La separabilità per backend è non lineare; il K-Means lineare la sottostima
-  perché impone cluster sferici (la misura affidabile è il kNN e l'evidenza
-  visiva di UMAP).
-- L'imputazione mediana globale dei NaN residui può attenuare lievi differenze
-  tra backend; una imputazione entro-backend è stata evitata di proposito per
-  non iniettare artificialmente il segnale di backend.
-- Finestra temporale breve (~3,5 settimane); t-SNE/UMAP usati per
+- La struttura per macchina è non lineare e a due livelli; il K-Means euclideo
+  la recupera solo parzialmente.
+- La finestra temporale è breve (~3,5 settimane); t-SNE/UMAP usati per
   visualizzare, non per misurare distanze.
+- DBSCAN richiede di tarare `eps` (scelto via k-distance) ed è sensibile in alta
+  dimensione; qui la struttura è abbastanza netta da renderlo stabile.
